@@ -594,6 +594,50 @@ static void PatchStatsCall() {
     if (f) { fprintf(f, "helpframe: stats call yamasi %s\n", ok ? "tamam" : "BASARISIZ (bayt/hedef uymadi)"); fclose(f); }
 }
 
+// ---- Teşhis (Log=1): CFont::PrintString (0x71A700) çağıranları -------------------------------------------
+// Tek satırlık kutuların metnini kimin çizdiğini bulmak için: sol üst bölgeye (x,y) yazı basan çağıranların
+// dönüş adresleri toplanır, sonra çağıran fonksiyonun makine kodu BetaMenu.log'a hex olarak dökülür.
+#define BM_ADDR_PRINTSTRING 0x71A700
+static volatile unsigned g_psRet[16];
+static volatile int g_psN = 0;
+static volatile int g_psDumped = 0;
+static void __cdecl NoteText(unsigned ret, unsigned xb, unsigned yb) {
+    float x, y; memcpy(&x, &xb, 4); memcpy(&y, &yb, 4);
+    if (x < 10.0f || x > 400.0f || y < 10.0f || y > 150.0f) return;     // sol üst bölge (piksel)
+    for (int i = 0; i < g_psN; ++i) if (g_psRet[i] == ret) return;
+    if (g_psN < 16) { g_psRet[g_psN] = ret; g_psN = g_psN + 1; }
+}
+static unsigned g_psOrig = BM_ADDR_PRINTSTRING;
+__declspec(naked) static void PrintStringStub() {
+    __asm {
+        pushad
+        pushfd
+        push dword ptr [esp + 44]      // y
+        push dword ptr [esp + 44]      // x
+        push dword ptr [esp + 44]      // dönüş adresi
+        call NoteText
+        add esp, 12
+        popfd
+        popad
+        jmp dword ptr [g_psOrig]
+    }
+}
+static void DumpPrintCallers() {
+    while (g_psDumped < g_psN) {
+        unsigned ret = g_psRet[g_psDumped++];
+        FILE* f = OpenLogAppend();
+        if (!f) return;
+        fprintf(f, "helpframe: YAZI cagiran=%08X\n", ret);
+        unsigned lo = ret > 0x400 ? ret - 0x400 : ret, hi = ret + 0x100;
+        if (lo < 0x401000) lo = 0x401000;
+        if (hi > 0x860000) hi = 0x860000;
+        fprintf(f, "helpframe: KOD %08X ", lo);
+        for (unsigned a = lo; a < hi; ++a) fprintf(f, "%02X", *(const unsigned char*)a);
+        fprintf(f, "\n");
+        fclose(f);
+    }
+}
+
 // DrawRect'i (başka modlarla paylaşılan, açılışta çok çağrılan fonksiyon) HOOKLAMIYORUZ: çökme yapıyordu.
 // Onun yerine DrawHelpText'in KENDİ kodu içindeki "call DrawRect" komutlarının hedefini bizim fonksiyona
 // çeviriyoruz (sadece o çağrı yerleri değişir, DrawRect'in kendisine dokunulmaz). Oyun içinde, yardım
@@ -674,6 +718,20 @@ static void TryInstallRectHook() {
         }
         FILE* fa = OpenLogAppend();
         if (fa) { fprintf(fa, "helpframe: tum exe taramasi: %d call yeri daha yamalandi\n", all); fclose(fa); }
+        int ps = 0;
+        for (uintptr_t a = 0x401000; a < 0x85F000; ++a) {
+            unsigned char* p = (unsigned char*)a;
+            if (p[0] != 0xE8) continue;
+            if ((uintptr_t)(p + 5) + (uintptr_t)*(int*)(p + 1) != (uintptr_t)BM_ADDR_PRINTSTRING) continue;
+            DWORD old2 = 0;
+            if (!VirtualProtect(p + 1, 4, PAGE_EXECUTE_READWRITE, &old2)) continue;
+            *(int*)(p + 1) = (int)((uintptr_t)&PrintStringStub - (uintptr_t)(p + 5));
+            VirtualProtect(p + 1, 4, old2, &old2);
+            FlushInstructionCache(GetCurrentProcess(), p, 5);
+            ++ps;
+        }
+        FILE* fp = OpenLogAppend();
+        if (fp) { fprintf(fp, "helpframe: PrintString cagri yeri yamalandi: %d\n", ps); fclose(fp); }
     }
     FILE* f = OpenLogAppend();
     if (f) { fprintf(f, "helpframe: DrawRect cagri yeri sayisi = %d (alt fonksiyon: ilk seviye %d, toplam %d; 0 ise cerceve cikmaz)\n", found, level1, nFns); fclose(f); }
@@ -686,6 +744,7 @@ static void __cdecl HookedDrawHelpText() {
         static int tick = 0; static long lastAll = -1;
         if (g_cfg.log && ++tick >= 120) {
             tick = 0;
+            DumpPrintCallers();
             if (g_cntAll != lastAll) {
                 lastAll = g_cntAll;
                 FILE* fd = OpenLogAppend();
