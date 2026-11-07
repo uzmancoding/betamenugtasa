@@ -594,6 +594,47 @@ static void PatchStatsCall() {
     if (f) { fprintf(f, "helpframe: stats call yamasi %s\n", ok ? "tamam" : "BASARISIZ (bayt/hedef uymadi)"); fclose(f); }
 }
 
+
+// ---- Teşhis (Log=1): DrawHelpText içindeki 0x58BFB8 "call 0x728640" (kutu çizen fonksiyon) --------------
+// Tüm yardım kutuları (hile, Buy Drink, dövme ...) metinden hemen önce bu çağrıdan geçiyor. 10 argümanı ve
+// içinde kaç DrawRect çağrıldığını loglar.
+typedef void(__cdecl* BoxFn10)(unsigned,unsigned,unsigned,unsigned,unsigned,unsigned,unsigned,unsigned,unsigned,unsigned);
+static BoxFn10 g_origBox = nullptr;
+static int g_boxLogged = 0;
+static void __cdecl HookedBoxCall(unsigned a0,unsigned a1,unsigned a2,unsigned a3,unsigned a4,unsigned a5,unsigned a6,unsigned a7,unsigned a8,unsigned a9) {
+    long before = g_cntAll;
+    g_origBox(a0,a1,a2,a3,a4,a5,a6,a7,a8,a9);
+    long inner = g_cntAll - before;
+    if (g_boxLogged < 60) {
+        static unsigned last[10] = {0}; unsigned cur[10] = {a0,a1,a2,a3,a4,a5,a6,a7,a8,a9};
+        if (memcmp(last, cur, sizeof(cur)) != 0) {
+            memcpy(last, cur, sizeof(cur)); ++g_boxLogged;
+            FILE* f = OpenLogAppend();
+            if (f) {
+                fprintf(f, "helpframe: KUTUCAGRI ic_drawrect=%ld", inner);
+                for (int i = 0; i < 10; ++i) { float v; memcpy(&v, &cur[i], 4); fprintf(f, " a%d=%08X(%g)", i, cur[i], (double)v); }
+                fprintf(f, "\n"); fclose(f);
+            }
+        }
+    }
+}
+static void PatchBoxCall() {
+    unsigned char* p = (unsigned char*)0x58BFB8;
+    uintptr_t tgt = (uintptr_t)(p + 5) + (uintptr_t)*(int*)(p + 1);
+    bool ok = p[0] == 0xE8 && tgt == 0x728640;
+    if (ok) {
+        DWORD old = 0;
+        g_origBox = (BoxFn10)tgt;
+        if (VirtualProtect(p + 1, 4, PAGE_EXECUTE_READWRITE, &old)) {
+            *(int*)(p + 1) = (int)((uintptr_t)&HookedBoxCall - (uintptr_t)(p + 5));
+            VirtualProtect(p + 1, 4, old, &old);
+            FlushInstructionCache(GetCurrentProcess(), p, 5);
+        } else ok = false;
+    }
+    FILE* f = OpenLogAppend();
+    if (f) { fprintf(f, "helpframe: kutu call yamasi %s\n", ok ? "tamam" : "BASARISIZ"); fclose(f); }
+}
+
 // ---- Teşhis (Log=1): CFont::PrintString (0x71A700) çağıranları -------------------------------------------
 // Tek satırlık kutuların metnini kimin çizdiğini bulmak için: sol üst bölgeye (x,y) yazı basan çağıranların
 // dönüş adresleri toplanır, sonra çağıran fonksiyonun makine kodu BetaMenu.log'a hex olarak dökülür.
@@ -697,6 +738,7 @@ static void TryInstallRectHook() {
         return nCur;
     };
     if (g_cfg.statsFrame) PatchStatsCall();
+    if (g_cfg.log && g_cfg.helpFrame) PatchBoxCall();
     if (g_cfg.helpFrame) level1 = bfs((uintptr_t)BM_ADDR_DRAWHELPTEXT, 0x1000);
     // Keşif: Log=1 iken CHud::Draw'dan (0x58FAE0, doğrulanmadı) da taranır; büyük kutuların çağıranı loglanır.
     if (g_cfg.log) bfs((uintptr_t)0x58FAE0, 0x1000);
