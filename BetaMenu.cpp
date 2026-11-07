@@ -464,13 +464,13 @@ static float g_hArea = 0.0f;       // en büyük (arka plan) dikdörtgenin alan�
 static int   g_hAlpha = 255;       // o dikdörtgenin alfası (fade-out sırasında düşer)
 static int   g_hRefAlpha = 1;      // görülen en yüksek arka plan alfası (tam görünürlük referansı)
 
+// Teşhis sayaçları: DrawRect kancasının içinde dosya yazmak yerine sayaç tutulur, dosyaya güvenli yerden
+// (HookedDrawHelpText) yazılır. İstisna olursa kodu burada saklanır.
+static volatile long g_cntAll = 0, g_cntRegion = 0, g_cntFramed = 0, g_cntExc = 0;
+static volatile unsigned g_excCode = 0;
+static volatile int g_excStage = 0;
 static int g_capLogged = 0;
 static void CaptureRect(const CRect& rc, const CRGBA& c) {
-    if (g_capLogged < 30) {
-        ++g_capLogged;
-        FILE* fl = OpenLogAppend();
-        if (fl) { fprintf(fl, "helpframe: yakalanan rect l=%.1f t=%.1f r=%.1f b=%.1f alpha=%d\n", rc.left, rc.top, rc.right, rc.bottom, (int)c.a); fclose(fl); }
-    }
     float l = rc.left < rc.right ? rc.left : rc.right,  r = rc.left < rc.right ? rc.right : rc.left;
     float t = rc.top < rc.bottom ? rc.top : rc.bottom,  b = rc.top < rc.bottom ? rc.bottom : rc.top;
     float area = (r - l) * (b - t);
@@ -510,6 +510,7 @@ static void FontBoxFrame(const CRect& rc, const CRGBA& c) {
     float t = rc.top < rc.bottom ? rc.top : rc.bottom,  b = rc.top < rc.bottom ? rc.bottom : rc.top;
     // Sadece sol üstteki yardım kutusu bölgesi (22.1, 21.9 sanal birim) ve yeterince geniş kutular.
     if (l < 17.0f * sx || l > 27.0f * sx || t < 17.0f * sy || t > 27.0f * sy || (r - l) < 150.0f * sx) return;
+    ++g_cntRegion;
     int a = c.a;
     if (a > g_fbRef) g_fbRef = a;
     int fa = (a * 255) / (g_fbRef > 0 ? g_fbRef : 1);
@@ -519,11 +520,7 @@ static void FontBoxFrame(const CRect& rc, const CRGBA& c) {
                (unsigned char)(g_cfg.lineColor & 0xFF), (unsigned char)fa);
     if (ot > 0.0f) ChamferOutline(l - th, t - th, r + th, b + th, ot, ck, CRGBA(0, 0, 0, (unsigned char)fa));
     ChamferFrame(l - th, t - th, r + th, b + th, th, ck, line);
-    if (g_fbLogged < 5) {
-        ++g_fbLogged;
-        FILE* f = OpenLogAppend();
-        if (f) { fprintf(f, "helpframe: font kutusu cerceveli l=%.0f t=%.0f r=%.0f b=%.0f alpha=%d\n", l, t, r, b, a); fclose(f); }
-    }
+    ++g_cntFramed;
 }
 
 // Teşhis (Log=1): sol üst yardım bölgesindeki HER dikdörtgen (boyut ne olursa olsun) loglanır.
@@ -542,13 +539,14 @@ static void LogRegionRect(const CRect& rc, const CRGBA& c, void* ret) {
 }
 
 static void __cdecl HookedDrawRect(const CRect& rc, const CRGBA& c) {
-    if (g_cfg.log) { __try { LogRegionRect(rc, c, _ReturnAddress()); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
-    if (!g_inHelp && g_cfg.log) { __try { LogBigRect(rc, c, _ReturnAddress()); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
+    ++g_cntAll;
     if (g_inHelp) {
-        __try { CaptureRect(rc, c); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        __try { CaptureRect(rc, c); } __except (g_excCode = GetExceptionCode(), g_excStage = 1, ++g_cntExc, EXCEPTION_EXECUTE_HANDLER) {}
     }
     g_origRect(rc, c);
-    if (!g_inHelp) { __try { FontBoxFrame(rc, c); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
+    if (!g_inHelp) {
+        __try { FontBoxFrame(rc, c); } __except (g_excCode = GetExceptionCode(), g_excStage = 2, ++g_cntExc, EXCEPTION_EXECUTE_HANDLER) {}
+    }
 }
 
 // Stats paneli (Tab): kutu 0x573EF4'teki "call DrawRect" ile çiziliyor (loglardan bulundu, SA 1.0 US).
@@ -684,6 +682,17 @@ static void TryInstallRectHook() {
 static void __cdecl HookedDrawHelpText() {
     if (!g_cfg.enabled || !(g_cfg.helpFrame || g_cfg.statsFrame)) { g_origHelp(); return; }
     TryInstallRectHook();
+    {   // Teşhis: ~2 sn'de bir, sayaçlar değiştiyse durum satırı (Log=1)
+        static int tick = 0; static long lastAll = -1;
+        if (g_cfg.log && ++tick >= 120) {
+            tick = 0;
+            if (g_cntAll != lastAll) {
+                lastAll = g_cntAll;
+                FILE* fd = OpenLogAppend();
+                if (fd) { fprintf(fd, "helpframe: sayac DrawRect=%ld bolgeKutu=%ld cerceveli=%ld istisna=%ld (son kod=%08X asama=%d)\n", g_cntAll, g_cntRegion, g_cntFramed, g_cntExc, g_excCode, g_excStage); fclose(fd); }
+            }
+        }
+    }
     if (!g_cfg.helpFrame) { g_origHelp(); return; }
     g_inHelp = true; g_haveRect = false; g_hArea = 0.0f; g_hAlpha = 255;
     static int enters = 0;
