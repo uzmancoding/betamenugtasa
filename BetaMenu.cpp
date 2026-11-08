@@ -764,9 +764,9 @@ static void CloneStatus() {
 static void RunProbe() {
     FILE* f = OpenLogAppend();
     if (!f) return;
-    fprintf(f, "PROBE basladi\n");
+    fprintf(f, "PROBE basladi (boxborder.asi yuklu mu: %s)\n", GetModuleHandleA("boxborder.asi") ? "EVET" : "HAYIR");
     int n = 0;
-    for (uintptr_t a = 0x401000; a < 0x85F000 && n < 400; ++a) {
+    for (uintptr_t a = 0x401000; a < 0x85F000 && n < 1500; ++a) {
         const unsigned char* p = (const unsigned char*)a;
         if (p[0] != 0xE8 && p[0] != 0xE9) continue;
         uintptr_t t = a + 5 + (uintptr_t)*(const int*)(p + 1);
@@ -777,6 +777,7 @@ static void RunProbe() {
         else continue;                                        // hiçbir modüle ait değil: rastgele bayt
         const char* base = strrchr(name, '\\'); base = base ? base + 1 : name;
         if (_stricmp(base, "BetaMenu.asi") == 0) continue;     // kendi yamalarımız
+        { size_t bl = strlen(base); if (bl < 4 || _stricmp(base + bl - 4, ".asi") != 0) continue; }   // sadece .asi modülleri
         fprintf(f, "PROBE %s %08X -> %08X (%s +0x%X)\n", p[0] == 0xE8 ? "call" : "jmp ", (unsigned)a, (unsigned)t, base, (unsigned)(t - (uintptr_t)hm));
         ++n;
     }
