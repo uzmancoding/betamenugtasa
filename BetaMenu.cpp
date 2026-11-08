@@ -566,7 +566,10 @@ static void __cdecl HookedStatsRect(const CRect& rc, const CRGBA& c) {
     const bool big = (w >= 150.0f && h >= 100.0f);
     if (big) { if (!g_cfg.statsFrame) return; }
     else {
-        if (!g_cfg.helpFrame || g_inHelp) return;
+        if (!g_cfg.helpFrame) return;
+        // DrawHelpText'in içinden geliyorsa (Cheat activated vb. yazıyı basan fonksiyon) kutuyu yakala;
+        // çerçeveyi DrawHelpText sarmalayıcısı çizer (fade dahil).
+        if (g_inHelp) { __try { CaptureRect(rc, c); } __except (EXCEPTION_EXECUTE_HANDLER) {} return; }
         if (w < 8.0f || h < 8.0f || w > 0.8f * (float)RsGlobal.maximumWidth) return;
     }
     float l = rc.left < rc.right ? rc.left : rc.right,  r = rc.left < rc.right ? rc.right : rc.left;
