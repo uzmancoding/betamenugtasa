@@ -777,11 +777,57 @@ static void RunProbe() {
         else continue;                                        // hiçbir modüle ait değil: rastgele bayt
         const char* base = strrchr(name, '\\'); base = base ? base + 1 : name;
         if (_stricmp(base, "BetaMenu.asi") == 0) continue;     // kendi yamalarımız
-        { size_t bl = strlen(base); if (bl < 4 || _stricmp(base + bl - 4, ".asi") != 0) continue; }   // sadece .asi modülleri
+        if (_stricmp(base, "boxborder.asi") != 0) continue;    // sadece boxborder
         fprintf(f, "PROBE %s %08X -> %08X (%s +0x%X)\n", p[0] == 0xE8 ? "call" : "jmp ", (unsigned)a, (unsigned)t, base, (unsigned)(t - (uintptr_t)hm));
         ++n;
     }
     fprintf(f, "PROBE bitti: %d yer\n", n);
+    fclose(f);
+}
+
+
+// ---- Probe: boxborder.asi'nin kendi genel kancasını (modül +0x31A0) dinler: hangi çağrı yerinden, hangi dikdörtgenle çağrılıyor?
+typedef void(__cdecl* BBFn)(const CRect*, const CRGBA*);
+static BBFn g_bbOrig = nullptr;
+struct BBRec { unsigned ret; int l, t, r, b, a; long n; };
+static BBRec g_bbRec[80];
+static volatile long g_bbN = 0, g_bbDumped = 0, g_bbTotal = 0;
+static void __cdecl HookedBB(const CRect* rc, const CRGBA* c) {
+    unsigned ret = (unsigned)(uintptr_t)_ReturnAddress();
+    ++g_bbTotal;
+    __try {
+        int l = (int)rc->left, t = (int)rc->top, r = (int)rc->right, b = (int)rc->bottom, a = c->a;
+        long n = g_bbN; bool found = false;
+        for (long i = 0; i < n; ++i) if (g_bbRec[i].ret == ret && g_bbRec[i].l == l && g_bbRec[i].t == t && g_bbRec[i].r == r && g_bbRec[i].b == b) { ++g_bbRec[i].n; found = true; break; }
+        if (!found && n < 80) { g_bbRec[n].ret = ret; g_bbRec[n].l = l; g_bbRec[n].t = t; g_bbRec[n].r = r; g_bbRec[n].b = b; g_bbRec[n].a = a; g_bbRec[n].n = 1; g_bbN = n + 1; }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    g_bbOrig(rc, c);
+}
+static void InstallBBProbe() {
+    HMODULE hm = GetModuleHandleA("boxborder.asi");
+    FILE* f = OpenLogAppend();
+    if (!hm) { if (f) { fprintf(f, "PROBE boxborder yok\n"); fclose(f); } return; }
+    LPVOID tgt = (LPVOID)((uintptr_t)hm + 0x31A0);
+    unsigned char* p = (unsigned char*)tgt;
+    if (f) { fprintf(f, "PROBE bb kanca %p bayt: %02X %02X %02X %02X %02X\n", tgt, p[0], p[1], p[2], p[3], p[4]); fclose(f); }
+    if (p[0] != 0x55) return;   // push ebp ile başlamıyorsa farklı sürüm
+    MH_STATUS s1 = MH_CreateHook(tgt, (LPVOID)&HookedBB, (LPVOID*)&g_bbOrig);
+    MH_STATUS s2 = (s1 == MH_OK) ? MH_EnableHook(tgt) : s1;
+    f = OpenLogAppend();
+    if (f) { fprintf(f, "PROBE bb kanca durum %d %d\n", (int)s1, (int)s2); fclose(f); }
+}
+static void BBStatus() {
+    static int tick = 0;
+    if (++tick < 60) return;
+    tick = 0;
+    if (!g_bbOrig) return;
+    FILE* f = OpenLogAppend();
+    if (!f) return;
+    long n = g_bbN;
+    fprintf(f, "PROBE bb toplam=%ld\n", g_bbTotal);
+    for (long i = g_bbDumped; i < n; ++i)
+        fprintf(f, "PROBE bb cagri ret=%08X l=%d t=%d r=%d b=%d alpha=%d\n", g_bbRec[i].ret, g_bbRec[i].l, g_bbRec[i].t, g_bbRec[i].r, g_bbRec[i].b, g_bbRec[i].a);
+    g_bbDumped = n;
     fclose(f);
 }
 
@@ -883,7 +929,7 @@ static void TryInstallRectHook() {
 }
 
 static void __cdecl HookedDrawHelpText() {
-    if (g_cfg.probe) { static int pt = 0; if (++pt == 400) RunProbe(); g_origHelp(); return; }
+    if (g_cfg.probe) { static int pt = 0; if (++pt == 400) { RunProbe(); InstallBBProbe(); } BBStatus(); g_origHelp(); return; }
     if (g_cfg.enabled && g_cfg.helpClone) { TryInstallRectHook(); if (g_cfg.log) CloneStatus(); g_origHelp(); return; }
     if (!g_cfg.enabled || !(g_cfg.helpFrame || g_cfg.statsFrame)) { g_origHelp(); return; }
     TryInstallRectHook();
