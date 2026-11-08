@@ -72,10 +72,6 @@ struct Config {
     bool  helpFrame   = false;
     float helpFrameTh = 2.0f;  // beyaz çizgi kalınlığı (sanal birim)
     float helpOutline = 2.0f;  // dış siyah kontur (sanal birim)
-    unsigned ornColor = 0xE1E1E1; // süsün rengi (RRGGBB), LineColor'dan bağımsız
-    bool  statsOrnament = false;  // Stats paneline de alt süs
-    float statsOrnY   = 0.0f;     // Stats süsünü aşağı (+) / yukarı (-) kaydır (sanal birim)
-    float cornerCut   = 1.5f;  // çizgi köşelerinin yassılığı (sanal birim, 0 = dik köşe)
     bool  statsFrame  = false; // Tab ile açılan Stats paneli için çerçeve (kalınlık: HelpBox ayarları)
 };
 static Config g_cfg;
@@ -134,16 +130,6 @@ static void LoadConfig() {
     g_cfg.ornOutline = ReadF("OrnamentOutline", d.ornOutline, ini);
     g_cfg.helpFrame   = ReadB("HelpBoxFrame", d.helpFrame, ini);
     g_cfg.statsFrame  = ReadB("StatsBoxFrame", d.statsFrame, ini);
-    g_cfg.cornerCut   = ReadF("CornerCut", d.cornerCut, ini);
-    g_cfg.statsOrnament = ReadB("StatsBoxOrnament", d.statsOrnament, ini);
-    g_cfg.statsOrnY   = ReadF("StatsBoxOrnamentOffsetY", d.statsOrnY, ini);
-    {
-        // OrnamentColor=E1E1E1 (başında # olabilir). Ini'de yoksa LineColor'a değil, kendi varsayılanına döner.
-        char cb[16] = {};
-        GetPrivateProfileStringA("BetaMenu", "OrnamentColor", "E1E1E1", cb, sizeof(cb), ini.c_str());
-        const char* cs = (cb[0] == '#') ? cb + 1 : cb;
-        g_cfg.ornColor = (unsigned)strtoul(cs, nullptr, 16) & 0xFFFFFF;
-    }
     g_cfg.helpFrameTh = ReadF("HelpBoxFrameThickness", d.helpFrameTh, ini);
     g_cfg.helpOutline = ReadF("HelpBoxOutlineThickness", d.helpOutline, ini);
 }
@@ -159,42 +145,6 @@ static void FrameRect(float l, float t, float r, float b, float th, const CRGBA&
     Rect(l, b - th, r, b, c);
     Rect(l, t, l + th, b, c);
     Rect(r - th, t, r, b, c);
-}
-
-// Köşeleri yassı (pah kırılmış) çerçeve. k = köşe kesiği (piksel). k<2 ise düz FrameRect.
-// Çizgi kalınlığı th; köşelerde 45 derecelik basamaklı çizgi (1 piksel yüksekliğinde satırlar) çizilir.
-static void ChamferFrame(float l, float t, float r, float b, float th, float k, const CRGBA& c) {
-    int n = (int)(k + 0.5f);
-    if (n < 2) { FrameRect(l, t, r, b, th, c); return; }
-    float kk = (float)n;
-    Rect(l + kk, t, r - kk, t + th, c);          // üst
-    Rect(l + kk, b - th, r - kk, b, c);          // alt
-    Rect(l, t + kk, l + th, b - kk, c);          // sol
-    Rect(r - th, t + kk, r, b - kk, c);          // sağ
-    for (int i = 0; i < n; ++i) {
-        float f = (float)i;
-        Rect(l + kk - f,       t + f,       l + kk - f + th, t + f + 1.0f, c);   // sol üst
-        Rect(r - kk + f - th,  t + f,       r - kk + f,      t + f + 1.0f, c);   // sağ üst
-        Rect(l + kk - f,       b - f - 1.0f, l + kk - f + th, b - f,         c);  // sol alt
-        Rect(r - kk + f - th,  b - f - 1.0f, r - kk + f,      b - f,         c);  // sağ alt
-    }
-}
-
-// Çizginin DIŞINA siyah kontur (ot piksel). Siyah kontur DİK köşeli kalır (orijinal beta'daki gibi);
-// beyaz çizginin yassı köşesinin açtığı üçgen boşluk da siyahla doldurulur.
-// (l,t,r,b) beyaz çerçevenin dış kenarı, k beyazın köşe kesiği.
-static void ChamferOutline(float l, float t, float r, float b, float ot, float k, const CRGBA& c) {
-    FrameRect(l - ot, t - ot, r + ot, b + ot, ot, c);
-    int n = (int)(k + 0.5f);
-    if (n < 2) return;
-    float kk = (float)n;
-    for (int i = 0; i < n; ++i) {
-        float f = (float)i, w = kk - f;                 // satır i'de kesilen genişlik
-        Rect(l,      t + f,        l + w, t + f + 1.0f, c);   // sol üst
-        Rect(r - w,  t + f,        r,     t + f + 1.0f, c);   // sağ üst
-        Rect(l,      b - f - 1.0f, l + w, b - f,        c);   // sol alt
-        Rect(r - w,  b - f - 1.0f, r,     b - f,        c);   // sağ alt
-    }
 }
 
 // Beta ekran görüntüsündeki alt süs: ortada ince çizgi, iki uçta kıvrım benzeri yığılmış bloklar,
@@ -269,7 +219,7 @@ static void CreateOrnamentSprites() {
 
 // Süs iki yarım parçadır: sol yarı sol köşeye, sağ yarı sağ köşeye. Parçaların "kuyruk çizgisi"
 // (kOrnLineV) alt çerçeve çizgisinin ortasına oturur; aradaki boşlukta çerçevenin kendi çizgisi görünür.
-static bool DrawOrnamentTextured(float fl, float fr, float cy, float sx, float sy, const CRGBA& white, float extraY = 0.0f) {
+static bool DrawOrnamentTextured(float fl, float fr, float cy, float sx, float sy, const CRGBA& white) {
     if (!g_ornL || !g_ornR) return false;
 
     float h = g_cfg.ornH * sy;
@@ -279,7 +229,7 @@ static bool DrawOrnamentTextured(float fl, float fr, float cy, float sx, float s
     const float span = (fr - fl) + 2.0f * g_cfg.ornX * sx;
     if (2.0f * w > span * 0.84f) { const float k = span * 0.84f / (2.0f * w); w *= k; h *= k; }
 
-    const float top = cy - kOrnLineV * h + (g_cfg.ornY + extraY) * sy;
+    const float top = cy - kOrnLineV * h + g_cfg.ornY * sy;
     const float bot = top + h;
     const float lx  = fl - g_cfg.ornX * sx;
     const float rx  = fr + g_cfg.ornX * sx;
@@ -409,10 +359,9 @@ static void __cdecl HookedDisplayStandardMenu(unsigned char panelId, bool bright
     const float fl = l - gap - th, ft = t - gap - th, fr = r + gap + th, fb = b + gap + th;
     // Önce siyah kontur (beyaz çizginin hemen dışında), sonra beyaz çizgi.
     const float ot = g_cfg.outline * sy;
-    const float ck = g_cfg.cornerCut * sy;
     if (ot > 0.0f)
-        ChamferOutline(fl, ft, fr, fb, ot, ck, CRGBA(0, 0, 0, 255));
-    ChamferFrame(fl, ft, fr, fb, th, ck, white);
+        FrameRect(fl - ot, ft - ot, fr + ot, fb + ot, ot, CRGBA(0, 0, 0, 255));
+    FrameRect(fl, ft, fr, fb, th, white);
 
     // 3) Orijinal kod: panel, "Tattoo" başlığı, yazılar, fiyatlar, seçim vurgusu.
     //    m_bColumnBackground'a DOKUNMUYORUZ (kapatınca yazılar bozuluyordu).
@@ -428,10 +377,8 @@ static void __cdecl HookedDisplayStandardMenu(unsigned char panelId, bool bright
     //    Doku yüklenemediyse eski DrawRect süsü yedek olarak çizilir.
     if (g_cfg.ornament) {
         const float cy = fb - th * 0.5f;
-        const CRGBA ornC((unsigned char)((g_cfg.ornColor >> 16) & 0xFF), (unsigned char)((g_cfg.ornColor >> 8) & 0xFF),
-                         (unsigned char)(g_cfg.ornColor & 0xFF), 255);
-        if (!DrawOrnamentTextured(fl, fr, cy, sx, sy, ornC))
-            DrawOrnament(fl, fr, cy, sx, sy, ornC);
+        if (!DrawOrnamentTextured(fl, fr, cy, sx, sy, white))
+            DrawOrnament(fl, fr, cy, sx, sy, white);
     }
 }
 
@@ -464,13 +411,13 @@ static float g_hArea = 0.0f;       // en büyük (arka plan) dikdörtgenin alan�
 static int   g_hAlpha = 255;       // o dikdörtgenin alfası (fade-out sırasında düşer)
 static int   g_hRefAlpha = 1;      // görülen en yüksek arka plan alfası (tam görünürlük referansı)
 
-// Teşhis sayaçları: DrawRect kancasının içinde dosya yazmak yerine sayaç tutulur, dosyaya güvenli yerden
-// (HookedDrawHelpText) yazılır. İstisna olursa kodu burada saklanır.
-static volatile long g_cntAll = 0, g_cntRegion = 0, g_cntFramed = 0, g_cntExc = 0;
-static volatile unsigned g_excCode = 0;
-static volatile int g_excStage = 0;
 static int g_capLogged = 0;
 static void CaptureRect(const CRect& rc, const CRGBA& c) {
+    if (g_capLogged < 30) {
+        ++g_capLogged;
+        FILE* fl = OpenLogAppend();
+        if (fl) { fprintf(fl, "helpframe: yakalanan rect l=%.1f t=%.1f r=%.1f b=%.1f alpha=%d\n", rc.left, rc.top, rc.right, rc.bottom, (int)c.a); fclose(fl); }
+    }
     float l = rc.left < rc.right ? rc.left : rc.right,  r = rc.left < rc.right ? rc.right : rc.left;
     float t = rc.top < rc.bottom ? rc.top : rc.bottom,  b = rc.top < rc.bottom ? rc.bottom : rc.top;
     float area = (r - l) * (b - t);
@@ -497,56 +444,12 @@ static void LogBigRect(const CRect& rc, const CRGBA& c, void* ret) {
     if (f) { fprintf(f, "helpframe: BUYUK rect cagiran=%08X l=%.0f t=%.0f r=%.0f b=%.0f alpha=%d\n", (unsigned)(uintptr_t)ret, rc.left, rc.top, rc.right, rc.bottom, (int)c.a); fclose(f); }
 }
 
-// Yardım kutusu çerçevesi (DrawHelpText'in dışında çizilen tek satırlık kutular için: "Use Videogame",
-// "Buy Drink", "Cheat activated" ...). Bu kutular CFont arka planı olarak 0x71A7EE'deki DrawRect çağrısından
-// çiziliyor (boxborder.asi de aynı yeri yamalıyor). Kutu çizildikten hemen sonra çerçeve çizilir; yazılar
-// sonra geldiği için çizginin üstünde kalır.
-static int g_fbRef = 1;
-static int g_fbLogged = 0;
-static void FontBoxFrame(const CRect& rc, const CRGBA& c) {
-    if (!g_cfg.enabled || !g_cfg.helpFrame) return;
-    const float sx = (float)RsGlobal.maximumWidth / 640.0f, sy = (float)RsGlobal.maximumHeight / 448.0f;
-    float l = rc.left < rc.right ? rc.left : rc.right,  r = rc.left < rc.right ? rc.right : rc.left;
-    float t = rc.top < rc.bottom ? rc.top : rc.bottom,  b = rc.top < rc.bottom ? rc.bottom : rc.top;
-    // Sadece sol üstteki yardım kutusu bölgesi (22.1, 21.9 sanal birim) ve yeterince geniş kutular.
-    if (l < 17.0f * sx || l > 27.0f * sx || t < 17.0f * sy || t > 27.0f * sy || (r - l) < 150.0f * sx) return;
-    ++g_cntRegion;
-    int a = c.a;
-    if (a > g_fbRef) g_fbRef = a;
-    int fa = (a * 255) / (g_fbRef > 0 ? g_fbRef : 1);
-    if (fa <= 0) return; if (fa > 255) fa = 255;
-    const float th = g_cfg.helpFrameTh * sy, ot = g_cfg.helpOutline * sy, ck = g_cfg.cornerCut * sy;
-    CRGBA line((unsigned char)((g_cfg.lineColor >> 16) & 0xFF), (unsigned char)((g_cfg.lineColor >> 8) & 0xFF),
-               (unsigned char)(g_cfg.lineColor & 0xFF), (unsigned char)fa);
-    if (ot > 0.0f) ChamferOutline(l - th, t - th, r + th, b + th, ot, ck, CRGBA(0, 0, 0, (unsigned char)fa));
-    ChamferFrame(l - th, t - th, r + th, b + th, th, ck, line);
-    ++g_cntFramed;
-}
-
-// Teşhis (Log=1): sol üst yardım bölgesindeki HER dikdörtgen (boyut ne olursa olsun) loglanır.
-static int g_regLogged = 0;
-static void LogRegionRect(const CRect& rc, const CRGBA& c, void* ret) {
-    if (g_regLogged >= 120) return;
-    const float sx = (float)RsGlobal.maximumWidth / 640.0f, sy = (float)RsGlobal.maximumHeight / 448.0f;
-    float l = rc.left < rc.right ? rc.left : rc.right,  r = rc.left < rc.right ? rc.right : rc.left;
-    float t = rc.top < rc.bottom ? rc.top : rc.bottom,  b = rc.top < rc.bottom ? rc.bottom : rc.top;
-    if (l > 140.0f * sx || t > 60.0f * sy || r < 10.0f * sx || b < 5.0f * sy) return;
-    if ((r - l) < 20.0f || (b - t) < 8.0f) return;
-    if ((r - l) > 0.8f * (float)RsGlobal.maximumWidth) return;   // tüm ekranı kaplayan karartma (fade) dikdörtgenlerini atla
-    ++g_regLogged;
-    FILE* f = OpenLogAppend();
-    if (f) { fprintf(f, "helpframe: BOLGE rect inHelp=%d cagiran=%08X l=%.0f t=%.0f r=%.0f b=%.0f alpha=%d\n", (int)g_inHelp, (unsigned)(uintptr_t)ret, l, t, r, b, (int)c.a); fclose(f); }
-}
-
 static void __cdecl HookedDrawRect(const CRect& rc, const CRGBA& c) {
-    ++g_cntAll;
+    if (!g_inHelp && g_cfg.log) { __try { LogBigRect(rc, c, _ReturnAddress()); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
     if (g_inHelp) {
-        __try { CaptureRect(rc, c); } __except (g_excCode = GetExceptionCode(), g_excStage = 1, ++g_cntExc, EXCEPTION_EXECUTE_HANDLER) {}
+        __try { CaptureRect(rc, c); } __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
     g_origRect(rc, c);
-    if (!g_inHelp) {
-        __try { FontBoxFrame(rc, c); } __except (g_excCode = GetExceptionCode(), g_excStage = 2, ++g_cntExc, EXCEPTION_EXECUTE_HANDLER) {}
-    }
 }
 
 // Stats paneli (Tab): kutu 0x573EF4'teki "call DrawRect" ile çiziliyor (loglardan bulundu, SA 1.0 US).
@@ -568,15 +471,8 @@ static void __cdecl HookedStatsRect(const CRect& rc, const CRGBA& c) {
     const float th = g_cfg.helpFrameTh * sy, ot = g_cfg.helpOutline * sy;
     CRGBA line((unsigned char)((g_cfg.lineColor >> 16) & 0xFF), (unsigned char)((g_cfg.lineColor >> 8) & 0xFF),
                (unsigned char)(g_cfg.lineColor & 0xFF), (unsigned char)fa);
-    const float ck = g_cfg.cornerCut * sy;
-    if (ot > 0.0f) ChamferOutline(l - th, t - th, r + th, b + th, ot, ck, CRGBA(0, 0, 0, (unsigned char)fa));
-    ChamferFrame(l - th, t - th, r + th, b + th, th, ck, line);
-    if (g_cfg.statsOrnament) {
-        const float sx2 = (float)RsGlobal.maximumWidth / 640.0f;
-        CRGBA ornC((unsigned char)((g_cfg.ornColor >> 16) & 0xFF), (unsigned char)((g_cfg.ornColor >> 8) & 0xFF),
-                   (unsigned char)(g_cfg.ornColor & 0xFF), (unsigned char)fa);
-        DrawOrnamentTextured(l - th, r + th, b + th * 0.5f, sx2, sy, ornC, g_cfg.statsOrnY);
-    }
+    if (ot > 0.0f) FrameRect(l - th - ot, t - th - ot, r + th + ot, b + th + ot, ot, CRGBA(0, 0, 0, (unsigned char)fa));
+    FrameRect(l - th, t - th, r + th, b + th, th, line);
 }
 
 static void PatchStatsCall() {
@@ -592,91 +488,6 @@ static void PatchStatsCall() {
     }
     FILE* f = OpenLogAppend();
     if (f) { fprintf(f, "helpframe: stats call yamasi %s\n", ok ? "tamam" : "BASARISIZ (bayt/hedef uymadi)"); fclose(f); }
-}
-
-
-// ---- Teşhis (Log=1): DrawHelpText içindeki 0x58BFB8 "call 0x728640" (kutu çizen fonksiyon) --------------
-// Tüm yardım kutuları (hile, Buy Drink, dövme ...) metinden hemen önce bu çağrıdan geçiyor. 10 argümanı ve
-// içinde kaç DrawRect çağrıldığını loglar.
-typedef void(__cdecl* BoxFn10)(unsigned,unsigned,unsigned,unsigned,unsigned,unsigned,unsigned,unsigned,unsigned,unsigned);
-static BoxFn10 g_origBox = nullptr;
-static int g_boxLogged = 0;
-static void __cdecl HookedBoxCall(unsigned a0,unsigned a1,unsigned a2,unsigned a3,unsigned a4,unsigned a5,unsigned a6,unsigned a7,unsigned a8,unsigned a9) {
-    long before = g_cntAll;
-    g_origBox(a0,a1,a2,a3,a4,a5,a6,a7,a8,a9);
-    long inner = g_cntAll - before;
-    if (g_boxLogged < 60) {
-        static unsigned last[10] = {0}; unsigned cur[10] = {a0,a1,a2,a3,a4,a5,a6,a7,a8,a9};
-        if (memcmp(last, cur, sizeof(cur)) != 0) {
-            memcpy(last, cur, sizeof(cur)); ++g_boxLogged;
-            FILE* f = OpenLogAppend();
-            if (f) {
-                fprintf(f, "helpframe: KUTUCAGRI ic_drawrect=%ld", inner);
-                for (int i = 0; i < 10; ++i) { float v; memcpy(&v, &cur[i], 4); fprintf(f, " a%d=%08X(%g)", i, cur[i], (double)v); }
-                fprintf(f, "\n"); fclose(f);
-            }
-        }
-    }
-}
-static void PatchBoxCall() {
-    unsigned char* p = (unsigned char*)0x58BFB8;
-    uintptr_t tgt = (uintptr_t)(p + 5) + (uintptr_t)*(int*)(p + 1);
-    bool ok = p[0] == 0xE8 && tgt == 0x728640;
-    if (ok) {
-        DWORD old = 0;
-        g_origBox = (BoxFn10)tgt;
-        if (VirtualProtect(p + 1, 4, PAGE_EXECUTE_READWRITE, &old)) {
-            *(int*)(p + 1) = (int)((uintptr_t)&HookedBoxCall - (uintptr_t)(p + 5));
-            VirtualProtect(p + 1, 4, old, &old);
-            FlushInstructionCache(GetCurrentProcess(), p, 5);
-        } else ok = false;
-    }
-    FILE* f = OpenLogAppend();
-    if (f) { fprintf(f, "helpframe: kutu call yamasi %s\n", ok ? "tamam" : "BASARISIZ"); fclose(f); }
-}
-
-// ---- Teşhis (Log=1): CFont::PrintString (0x71A700) çağıranları -------------------------------------------
-// Tek satırlık kutuların metnini kimin çizdiğini bulmak için: sol üst bölgeye (x,y) yazı basan çağıranların
-// dönüş adresleri toplanır, sonra çağıran fonksiyonun makine kodu BetaMenu.log'a hex olarak dökülür.
-#define BM_ADDR_PRINTSTRING 0x71A700
-static volatile unsigned g_psRet[16];
-static volatile int g_psN = 0;
-static volatile int g_psDumped = 0;
-static void __cdecl NoteText(unsigned ret, unsigned xb, unsigned yb) {
-    float x, y; memcpy(&x, &xb, 4); memcpy(&y, &yb, 4);
-    if (x < 10.0f || x > 400.0f || y < 10.0f || y > 150.0f) return;     // sol üst bölge (piksel)
-    for (int i = 0; i < g_psN; ++i) if (g_psRet[i] == ret) return;
-    if (g_psN < 16) { g_psRet[g_psN] = ret; g_psN = g_psN + 1; }
-}
-static unsigned g_psOrig = BM_ADDR_PRINTSTRING;
-__declspec(naked) static void PrintStringStub() {
-    __asm {
-        pushad
-        pushfd
-        push dword ptr [esp + 44]      // y
-        push dword ptr [esp + 44]      // x
-        push dword ptr [esp + 44]      // dönüş adresi
-        call NoteText
-        add esp, 12
-        popfd
-        popad
-        jmp dword ptr [g_psOrig]
-    }
-}
-static void DumpPrintCallers() {
-    while (g_psDumped < g_psN) {
-        unsigned ret = g_psRet[g_psDumped++];
-        FILE* f = OpenLogAppend();
-        if (!f) return;
-        fprintf(f, "helpframe: YAZI cagiran=%08X\n", ret);
-        unsigned lo = ret > 0x400 ? ret - 0x400 : ret, hi = ret + 0x100;
-        if (lo < 0x401000) lo = 0x401000;
-        if (hi > 0x860000) hi = 0x860000;
-        fprintf(f, "helpframe: KOD %08X ", lo);
-        for (unsigned a = lo; a < hi; ++a) fprintf(f, "%02X", *(const unsigned char*)a);
-        fprintf(f, "\n");
-        fclose(f);
-    }
 }
 
 // DrawRect'i (başka modlarla paylaşılan, açılışta çok çağrılan fonksiyon) HOOKLAMIYORUZ: çökme yapıyordu.
@@ -738,7 +549,6 @@ static void TryInstallRectHook() {
         return nCur;
     };
     if (g_cfg.statsFrame) PatchStatsCall();
-    if (g_cfg.log && g_cfg.helpFrame) PatchBoxCall();
     if (g_cfg.helpFrame) level1 = bfs((uintptr_t)BM_ADDR_DRAWHELPTEXT, 0x1000);
     // Keşif: Log=1 iken CHud::Draw'dan (0x58FAE0, doğrulanmadı) da taranır; büyük kutuların çağıranı loglanır.
     if (g_cfg.log) bfs((uintptr_t)0x58FAE0, 0x1000);
@@ -760,20 +570,6 @@ static void TryInstallRectHook() {
         }
         FILE* fa = OpenLogAppend();
         if (fa) { fprintf(fa, "helpframe: tum exe taramasi: %d call yeri daha yamalandi\n", all); fclose(fa); }
-        int ps = 0;
-        for (uintptr_t a = 0x401000; a < 0x85F000; ++a) {
-            unsigned char* p = (unsigned char*)a;
-            if (p[0] != 0xE8) continue;
-            if ((uintptr_t)(p + 5) + (uintptr_t)*(int*)(p + 1) != (uintptr_t)BM_ADDR_PRINTSTRING) continue;
-            DWORD old2 = 0;
-            if (!VirtualProtect(p + 1, 4, PAGE_EXECUTE_READWRITE, &old2)) continue;
-            *(int*)(p + 1) = (int)((uintptr_t)&PrintStringStub - (uintptr_t)(p + 5));
-            VirtualProtect(p + 1, 4, old2, &old2);
-            FlushInstructionCache(GetCurrentProcess(), p, 5);
-            ++ps;
-        }
-        FILE* fp = OpenLogAppend();
-        if (fp) { fprintf(fp, "helpframe: PrintString cagri yeri yamalandi: %d\n", ps); fclose(fp); }
     }
     FILE* f = OpenLogAppend();
     if (f) { fprintf(f, "helpframe: DrawRect cagri yeri sayisi = %d (alt fonksiyon: ilk seviye %d, toplam %d; 0 ise cerceve cikmaz)\n", found, level1, nFns); fclose(f); }
@@ -782,18 +578,6 @@ static void TryInstallRectHook() {
 static void __cdecl HookedDrawHelpText() {
     if (!g_cfg.enabled || !(g_cfg.helpFrame || g_cfg.statsFrame)) { g_origHelp(); return; }
     TryInstallRectHook();
-    {   // Teşhis: ~2 sn'de bir, sayaçlar değiştiyse durum satırı (Log=1)
-        static int tick = 0; static long lastAll = -1;
-        if (g_cfg.log && ++tick >= 120) {
-            tick = 0;
-            DumpPrintCallers();
-            if (g_cntAll != lastAll) {
-                lastAll = g_cntAll;
-                FILE* fd = OpenLogAppend();
-                if (fd) { fprintf(fd, "helpframe: sayac DrawRect=%ld bolgeKutu=%ld cerceveli=%ld istisna=%ld (son kod=%08X asama=%d)\n", g_cntAll, g_cntRegion, g_cntFramed, g_cntExc, g_excCode, g_excStage); fclose(fd); }
-            }
-        }
-    }
     if (!g_cfg.helpFrame) { g_origHelp(); return; }
     g_inHelp = true; g_haveRect = false; g_hArea = 0.0f; g_hAlpha = 255;
     static int enters = 0;
@@ -815,9 +599,8 @@ static void __cdecl HookedDrawHelpText() {
     if (fa <= 0) return;
     CRGBA lineF = line; lineF.a = (unsigned char)fa;
     const float fl = g_hl - th, ft = g_ht - th, fr = g_hr + th, fb = g_hb + th;
-    const float ck = g_cfg.cornerCut * sy;
-    if (ot > 0.0f) ChamferOutline(fl, ft, fr, fb, ot, ck, CRGBA(0, 0, 0, (unsigned char)fa));
-    ChamferFrame(fl, ft, fr, fb, th, ck, lineF);
+    if (ot > 0.0f) FrameRect(fl - ot, ft - ot, fr + ot, fb + ot, ot, CRGBA(0, 0, 0, (unsigned char)fa));
+    FrameRect(fl, ft, fr, fb, th, lineF);
     static int helpLogged = 0;
     if (helpLogged < 150) {   // sadece kutu değişince yaz (en çok 150 satır; Log ayarından bağımsız) (her kare yazmak logu şişiriyordu)
         static float ll = 0, lt = 0, lr = 0, lb = 0;
