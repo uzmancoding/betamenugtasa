@@ -558,15 +558,24 @@ static void __cdecl HookedDrawRect(const CRect& rc, const CRGBA& c) {
 static int g_statsRef = 1;
 static void __cdecl HookedStatsRect(const CRect& rc, const CRGBA& c) {
     g_origRect(rc, c);
-    if (!g_cfg.enabled || !g_cfg.statsFrame) return;
+    if (!g_cfg.enabled) return;
     float w = rc.right - rc.left; if (w < 0) w = -w;
     float h = rc.bottom - rc.top; if (h < 0) h = -h;
-    if (w < 150.0f || h < 100.0f) return;            // sadece büyük arka plan kutusu
+    // Bu çağrı yeri (0x573EF4) hem Stats panelini (büyük kutu) hem de tek satırlık yardım kutularını
+    // (Cheat activated, Use Videogame, Buy Drink ...) çiziyor. boxborder.asi'nin loglanan çağrılarından anlaşıldı.
+    const bool big = (w >= 150.0f && h >= 100.0f);
+    if (big) { if (!g_cfg.statsFrame) return; }
+    else {
+        if (!g_cfg.helpFrame || g_inHelp) return;
+        if (w < 8.0f || h < 8.0f || w > 0.8f * (float)RsGlobal.maximumWidth) return;
+    }
     float l = rc.left < rc.right ? rc.left : rc.right,  r = rc.left < rc.right ? rc.right : rc.left;
     float t = rc.top < rc.bottom ? rc.top : rc.bottom,  b = rc.top < rc.bottom ? rc.bottom : rc.top;
     int a = c.a;
-    if (a > g_statsRef) g_statsRef = a;
-    int fa = (a * 255) / (g_statsRef > 0 ? g_statsRef : 1);
+    static int smallRef = 1;
+    int& ref = big ? g_statsRef : smallRef;
+    if (a > ref) ref = a;
+    int fa = (a * 255) / (ref > 0 ? ref : 1);
     if (fa <= 0) return; if (fa > 255) fa = 255;
     const float sy = (float)RsGlobal.maximumHeight / 448.0f;
     const float th = g_cfg.helpFrameTh * sy, ot = g_cfg.helpOutline * sy;
@@ -575,7 +584,7 @@ static void __cdecl HookedStatsRect(const CRect& rc, const CRGBA& c) {
     const float ck = g_cfg.cornerCut * sy;
     if (ot > 0.0f) ChamferOutline(l - th, t - th, r + th, b + th, ot, ck, CRGBA(0, 0, 0, (unsigned char)fa));
     ChamferFrame(l - th, t - th, r + th, b + th, th, ck, line);
-    if (g_cfg.statsOrnament) {
+    if (big && g_cfg.statsOrnament) {
         const float sx2 = (float)RsGlobal.maximumWidth / 640.0f;
         CRGBA ornC((unsigned char)((g_cfg.ornColor >> 16) & 0xFF), (unsigned char)((g_cfg.ornColor >> 8) & 0xFF),
                    (unsigned char)(g_cfg.ornColor & 0xFF), (unsigned char)fa);
@@ -837,7 +846,7 @@ static void TryInstallRectHook() {
     if (tried || ++frames < 120) return;
     tried = true;
     g_origRect = (DrawRectFn)(uintptr_t)BM_ADDR_DRAWRECT;
-    if (g_cfg.helpClone) { if (g_cfg.statsFrame) PatchStatsCall(); return; }
+    if (g_cfg.helpClone) { if (g_cfg.statsFrame || g_cfg.helpFrame) PatchStatsCall(); return; }
     // Sadece exe kod bölgesindeki adresler okunur (yanlış eşleşen bayt dizilerinde çökmemek için).
     auto inExe = [](uintptr_t a) { return a >= 0x401000 && a < 0x860000; };
     int found = 0;
@@ -886,7 +895,7 @@ static void TryInstallRectHook() {
         }
         return nCur;
     };
-    if (g_cfg.statsFrame) PatchStatsCall();
+    if (g_cfg.statsFrame || g_cfg.helpFrame) PatchStatsCall();
     if (g_cfg.log && g_cfg.helpFrame) PatchBoxCall();
     if (g_cfg.helpFrame) level1 = bfs((uintptr_t)BM_ADDR_DRAWHELPTEXT, 0x1000);
     // Keşif: Log=1 iken CHud::Draw'dan (0x58FAE0, doğrulanmadı) da taranır; büyük kutuların çağıranı loglanır.
