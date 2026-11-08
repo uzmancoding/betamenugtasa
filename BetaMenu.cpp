@@ -70,7 +70,8 @@ struct Config {
 
     // Sol üstteki yardım kutuları (ornamentsiz çerçeve). Varsayılan KAPALI = oyunun orijinal görünümü.
     bool  helpFrame   = false;
-    bool  helpClone   = false;   // HelpBoxClone=1: boxborder.asi'yi birebir taklit eden deneme modu
+    bool  helpClone   = false;
+    bool  probe       = false;   // Probe=1: diğer modların (boxborder vb.) yamaladığı yerleri BetaMenu.log'a yazar   // HelpBoxClone=1: boxborder.asi'yi birebir taklit eden deneme modu
     float helpFrameTh = 2.0f;  // beyaz çizgi kalınlığı (sanal birim)
     float helpOutline = 2.0f;  // dış siyah kontur (sanal birim)
     unsigned ornColor = 0xE1E1E1; // süsün rengi (RRGGBB), LineColor'dan bağımsız
@@ -135,6 +136,7 @@ static void LoadConfig() {
     g_cfg.ornOutline = ReadF("OrnamentOutline", d.ornOutline, ini);
     g_cfg.helpFrame   = ReadB("HelpBoxFrame", d.helpFrame, ini);
     g_cfg.helpClone   = ReadB("HelpBoxClone", d.helpClone, ini);
+    g_cfg.probe       = ReadB("Probe", d.probe, ini);
     g_cfg.statsFrame  = ReadB("StatsBoxFrame", d.statsFrame, ini);
     g_cfg.cornerCut   = ReadF("CornerCut", d.cornerCut, ini);
     g_cfg.statsOrnament = ReadB("StatsBoxOrnament", d.statsOrnament, ini);
@@ -757,6 +759,31 @@ static void CloneStatus() {
     fclose(f);
 }
 
+
+// ---- Probe=1: exe kodunda başka modüllere (başka bir ASI'ye) giden TÜM call/jmp yerlerini listeler -------------
+static void RunProbe() {
+    FILE* f = OpenLogAppend();
+    if (!f) return;
+    fprintf(f, "PROBE basladi\n");
+    int n = 0;
+    for (uintptr_t a = 0x401000; a < 0x85F000 && n < 400; ++a) {
+        const unsigned char* p = (const unsigned char*)a;
+        if (p[0] != 0xE8 && p[0] != 0xE9) continue;
+        uintptr_t t = a + 5 + (uintptr_t)*(const int*)(p + 1);
+        if (t >= 0x401000 && t < 0x860000) continue;          // exe içi: normal
+        HMODULE hm = nullptr; char name[MAX_PATH] = "?";
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)t, &hm) && hm)
+            GetModuleFileNameA(hm, name, MAX_PATH);
+        else continue;                                        // hiçbir modüle ait değil: rastgele bayt
+        const char* base = strrchr(name, '\\'); base = base ? base + 1 : name;
+        if (_stricmp(base, "BetaMenu.asi") == 0) continue;     // kendi yamalarımız
+        fprintf(f, "PROBE %s %08X -> %08X (%s +0x%X)\n", p[0] == 0xE8 ? "call" : "jmp ", (unsigned)a, (unsigned)t, base, (unsigned)(t - (uintptr_t)hm));
+        ++n;
+    }
+    fprintf(f, "PROBE bitti: %d yer\n", n);
+    fclose(f);
+}
+
 static void TryInstallRectHook() {
     static bool tried = false;
     static int frames = 0;
@@ -855,6 +882,7 @@ static void TryInstallRectHook() {
 }
 
 static void __cdecl HookedDrawHelpText() {
+    if (g_cfg.probe) { static int pt = 0; if (++pt == 400) RunProbe(); g_origHelp(); return; }
     if (g_cfg.enabled && g_cfg.helpClone) { TryInstallRectHook(); if (g_cfg.log) CloneStatus(); g_origHelp(); return; }
     if (!g_cfg.enabled || !(g_cfg.helpFrame || g_cfg.statsFrame)) { g_origHelp(); return; }
     TryInstallRectHook();
@@ -912,7 +940,7 @@ static void InstallHook() {
         MH_EnableHook(target);
 
     // Yardım kutusu çerçevesi: sadece ini'de HelpBoxFrame=1 ise kurulur (kapalıyken oyuna hiç dokunmaz).
-    if (g_cfg.helpFrame || g_cfg.statsFrame || g_cfg.helpClone) {
+    if (g_cfg.helpFrame || g_cfg.statsFrame || g_cfg.helpClone || g_cfg.probe) {
         LPVOID tr = (LPVOID)BM_ADDR_DRAWRECT, th = (LPVOID)BM_ADDR_DRAWHELPTEXT;
         // Tanı: adresler ve ilk baytlar BetaMenu.log'a yazılır (çökme olursa nedenini görmek için).
         FILE* f = OpenLogAppend();
