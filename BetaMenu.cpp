@@ -723,6 +723,12 @@ static void PatchCloneSite() {
     unsigned char* p = (unsigned char*)0x71A7EE;
     FILE* f = OpenLogAppend();
     if (f) { fprintf(f, "helpframe: CLONE 0x71A7EE bayt oncesi: %02X %02X %02X %02X %02X\n", p[0], p[1], p[2], p[3], p[4]); fclose(f); }
+    {   // Fonksiyon başları başka bir mod tarafından yönlendirilmiş mi (E9 = jmp)?
+        const unsigned char* q1 = (const unsigned char*)0x71A5E0; const unsigned char* q2 = (const unsigned char*)0x71A700;
+        FILE* fq = OpenLogAppend();
+        if (fq) { fprintf(fq, "helpframe: CLONE 0x71A5E0: %02X %02X %02X %02X %02X | 0x71A700: %02X %02X %02X %02X %02X\n", q1[0], q1[1], q1[2], q1[3], q1[4], q2[0], q2[1], q2[2], q2[3], q2[4]); fclose(fq); }
+    }
+    g_origRect = (DrawRectFn)(uintptr_t)BM_ADDR_DRAWRECT;
     uintptr_t tgt = (uintptr_t)(p + 5) + (uintptr_t)*(int*)(p + 1);
     bool ok = p[0] == 0xE8 && tgt == (uintptr_t)BM_ADDR_DRAWRECT;
     if (ok) {
@@ -757,7 +763,7 @@ static void TryInstallRectHook() {
     if (tried || ++frames < 120) return;
     tried = true;
     g_origRect = (DrawRectFn)(uintptr_t)BM_ADDR_DRAWRECT;
-    if (g_cfg.helpClone) { PatchCloneSite(); if (g_cfg.statsFrame) PatchStatsCall(); return; }
+    if (g_cfg.helpClone) { if (g_cfg.statsFrame) PatchStatsCall(); return; }
     // Sadece exe kod bölgesindeki adresler okunur (yanlış eşleşen bayt dizilerinde çökmemek için).
     auto inExe = [](uintptr_t a) { return a >= 0x401000 && a < 0x860000; };
     int found = 0;
@@ -940,6 +946,7 @@ class BetaMenuMod {
 public:
     BetaMenuMod() {
         LoadConfig();
+        if (g_cfg.enabled && g_cfg.helpClone) PatchCloneSite();   // boxborder gibi ASI yüklenir yüklenmez (diğer modlar kodu kopyalamadan önce)
 
         Events::initRwEvent += [] { CreateOrnamentSprites(); InstallHook(); };
 
